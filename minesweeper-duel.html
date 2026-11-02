@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>دوئل مین‌روب تلگرام</title>
+    <!-- کتابخانه وب‌اپ تلگرام -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- کتابخانه Supabase -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        :root {
+            --bg-color: var(--tg-theme-bg-color, #f0f2f5);
+            --text-color: var(--tg-theme-text-color, #222);
+            --button-color: var(--tg-theme-button-color, #2481cc);
+            --button-text: var(--tg-theme-button-text-color, #fff);
+        }
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 10px;
+        }
+        h2 { margin-bottom: 5px; font-size: 1.2rem; text-align: center; }
+        #status-bar { font-size: 0.9rem; margin-bottom: 15px; font-weight: bold; color: #555; text-align: center; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(6, 45px);
+            grid-gap: 5px;
+            background: #ccc;
+            padding: 5px;
+            border-radius: 8px;
+        }
+        .cell {
+            width: 45px;
+            height: 45px;
+            background: #e0e0e0;
+            border: none;
+            font-size: 1.1rem;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            user-select: none;
+        }
+        .cell.revealed { background: #fff; border: 1px solid #ddd; }
+        .cell.mine { background: #ff4d4d; color: white; }
+    </style>
+</head>
+<body>
+
+    <h2 id="players-title">درحال بارگذاری دوئل...</h2>
+    <div id="status-bar">منتظر اتصال...</div>
+    
+    <div class="grid" id="game-board"></div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+
+        // اطلاعات سوپابیس شما (از قبل جایگذاری شده)
+        const SUPABASE_URL = 'https://hpxxnwzkzvryuzmizbeg.supabase.co';
+        const SUPABASE_KEY = 'Sb_publishable_qi_8yuTxTJ_6wICbVFIG7w_VlLHl0j8';
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const matchId = urlParams.get('match');
+        
+        // شناسه کاربر از تلگرام یا حالت تستی
+        const myUserId = tg.initDataUnsafe?.user?.id || 12345; 
+
+        let matchData = null;
+
+        async function initGame() {
+            if (!matchId) {
+                document.getElementById('status-bar').innerText = 'خطا: شناسه مسابقه یافت نشد!';
+                return;
+            }
+
+            const { data, error } = await supabaseClient
+                .from('duels')
+                .select('*')
+                .eq('match_id', matchId)
+                .single();
+
+            if (error || !data) {
+                document.getElementById('status-bar').innerText = 'خطا در بارگذاری بازی از دیتابیس!';
+                return;
+            }
+
+            matchData = data;
+            document.getElementById('players-title').innerText = `${matchData.player1_name} ⚔️ ${matchData.player2_name || 'حریف...'}`;
+            
+            renderBoard();
+            setupRealtime();
+        }
+
+        function renderBoard() {
+            const boardEl = document.getElementById('game-board');
+            boardEl.innerHTML = '';
+            
+            const board = matchData.board_state || Array(36).fill({ revealed: false, mine: false, value: 0 });
+
+            board.forEach((cell, index) => {
+                const btn = document.createElement('button');
+                btn.className = `cell ${cell.revealed ? 'revealed' : ''} ${cell.revealed && cell.mine ? 'mine' : ''}`;
+                if (cell.revealed) {
+                    btn.innerText = cell.mine ? '💣' : (cell.value > 0 ? cell.value : '');
+                }
+                
+                btn.onclick = () => makeMove(index);
+                boardEl.appendChild(btn);
+            });
+
+            const isMyTurn = matchData.turn === myUserId;
+            document.getElementById('status-bar').innerText = isMyTurn ? '🟢 نوبت شماست!' : '⏳ نوبت حریف است...';
+        }
+
+        async function makeMove(index) {
+            if (matchData.turn !== myUserId) {
+                tg.showAlert('هنوز نوبت شما نیست!');
+                return;
+            }
+            
+            let board = matchData.board_state;
+            if (board[index].revealed) return;
+
+            board[index].revealed = true;
+            let nextTurn = (myUserId === matchData.player1_id) ? matchData.player2_id : matchData.player1_id;
+
+            await supabaseClient
+                .from('duels')
+                .update({ board_state: board, turn: nextTurn })
+                .eq('match_id', matchId);
+        }
+
+        function setupRealtime() {
+            supabaseClient
+                .channel('public:duels')
+                .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: `duels` }, payload => {
+                    if (payload.new.match_id === matchId) {
+                        matchData = payload.new;
+                        
