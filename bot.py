@@ -1,16 +1,27 @@
 import os
 import uuid
 import random
+import threading
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from supabase import create_client, Client
 
-# اطلاعات سوپابیس شما
+# راه‌اندازی یک وب‌سرور کوچک برای پاسخ به درخواست‌های هاست (پورت 7860)
+app_web = Flask(__name__)
+
+@app_web.route('/')
+def home():
+    return "🤖 Telegram Bot & Minesweeper Duel Server is Live!"
+
+def run_web():
+    app_web.run(host="0.0.0.0", port=7860)
+
+# اطلاعات سوپابیس و تلگرام
 SUPABASE_URL = "https://hpxxnwzkzvryuzmizbeg.supabase.co"
 SUPABASE_KEY = "Sb_publishable_qi_8yuTxTJ_6wICbVFIG7w_VlLHl0j8"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# لینک گیت‌هاب پیج و توکن ربات
 WEB_APP_URL = "https://arshiaeliasy.github.io/minesweeper-duel/"
 BOT_TOKEN = "9199489345:AAE8KGBymljPmHR-NJdRVyPkU4NbMMzF7s0"
 
@@ -18,7 +29,6 @@ async def start_duel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     match_id = f"duel_{uuid.uuid4().hex[:8]}"
 
-    # ساخت جدول اولیه بازی (6 در 6 با ۶ بمب رندوم)
     board = []
     mine_positions = random.sample(range(36), 6)
     for i in range(36):
@@ -28,7 +38,6 @@ async def start_duel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "value": 1 if i in mine_positions else 0
         })
 
-    # ثبت مسابقه در جدول duels در سوپابیس
     supabase.table("duels").insert({
         "match_id": match_id,
         "player1_name": user.first_name,
@@ -58,7 +67,6 @@ async def join_duel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     match_id = query.data.replace("join_", "")
 
-    # بررسی وضعیت مسابقه در دیتابیس
     res = supabase.table("duels").select("*").eq("match_id", match_id).execute()
     if not res.data:
         await query.edit_message_text("❌ این مسابقه منقضی شده یا وجود ندارد.")
@@ -74,14 +82,12 @@ async def join_duel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("شما نمی‌توانید با خودتان بازی کنید! منتظر حریف بمانید.", show_alert=True)
         return
 
-    # ثبت بازیکن دوم و تغییر وضعیت به playing
     supabase.table("duels").update({
         "player2_name": user.first_name,
         "player2_id": user.id,
         "status": "playing"
     }).eq("match_id", match_id).execute()
 
-    # ساخت لینک مینی‌اپ با شناسه یکتای مسابقه
     final_url = f"{WEB_APP_URL}?match={match_id}"
     keyboard = [
         [InlineKeyboardButton("🚀 ورود به زمین مسابقه", url=final_url)]
@@ -98,11 +104,17 @@ async def join_duel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 def main():
+    # اجرای وب‌سرور در پس‌زمینه برای راضی نگه داشتن هاست
+    web_thread = threading.Thread(target=run_web)
+    web_thread.daemon = True
+    web_thread.start()
+
+    # راه‌اندازی ربات تلگرام
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("duel", start_duel))
     app.add_handler(CallbackQueryHandler(join_duel, pattern="^join_"))
 
-    print("🤖 ربات با موفقیت روی هاست ابری روشن شد و در حال گوش دادن است...")
+    print("🤖 ربات با موفقیت روی هاست ابری Hugging Face روشن شد...")
     app.run_polling()
 
 if __name__ == "__main__":
